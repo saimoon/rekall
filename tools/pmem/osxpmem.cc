@@ -20,34 +20,36 @@ specific language governing permissions and limitations under the License.
 #include <mach-o/dyld.h>
 #include <yaml-cpp/yaml.h>
 
+namespace aff4 {
+
 
 AFF4Status PmemMetadata::LoadMetadata(string sysctl_name) {
   size_t metalen = buf_.size();
   pmem_meta_t *meta = get_meta();
-  
+
   // Get the required size of the meta struct (it varies).
   sysctlbyname(sysctl_name.c_str(), 0, &metalen, 0, 0);
 
   // Allocate the required number of bytes.
   buf_.resize(metalen);
   meta = get_meta();
-  
+
   int error = sysctlbyname(sysctl_name.c_str(), meta, &metalen, 0, 0);
   // We need at least one struct full of data.
   if (error == 0 && metalen > sizeof(pmem_meta_t)) {
     return STATUS_OK;
   }
-  
+
   if (meta->pmem_api_version != MINIMUM_PMEM_API_VERSION) {
-    LOG(ERROR) << "Pmem driver version incompatible. Reported " <<
-      meta->pmem_api_version << " required: " <<
-      static_cast<int>(MINIMUM_PMEM_API_VERSION) << "\n";
+      resolver.logger->error(
+          "Pmem driver version incompatible. Reported {} required: {}",
+          meta->pmem_api_version, static_cast<int>(MINIMUM_PMEM_API_VERSION));
     return INCOMPATIBLE_TYPES;
   }
-  
+
   return STATUS_OK;
 }
-  
+
 pmem_meta_t *PmemMetadata::get_meta() {
   return reinterpret_cast<pmem_meta_t *>(&buf_[0]);
 }
@@ -65,17 +67,17 @@ vector<pmem_meta_record_t> PmemMetadata::get_records() {
     // Cast the record and watch out for overflow.
     if (meta_index + sizeof(pmem_meta_record_t) > meta_size)
       break;
-  
+
     pmem_meta_record_t *record = reinterpret_cast<pmem_meta_record_t *>
       (reinterpret_cast<char *>(meta) + meta_index);
-    
+
     result.push_back(*record);
     meta_index += record->size;
   }
-  
+
   return result;
 }
-    
+
 size_t PmemMetadata::get_meta_size() {
   return buf_.size();
 };
@@ -94,9 +96,9 @@ string OSXPmemImager::DumpMemoryInfoToYaml() {
   node["kaslr_slide"] = meta->kaslr_slide;
   node["kernel_version"] = meta->kernel_version;
   node["kernel_version_poff"] = meta->version_poffset;
-  
+
   YAML::Node runs;
-  
+
   for (auto record: metadata.get_records()) {
     if (record.type == pmem_efi_range_type &&
         metadata.efi_readable(record.efi_range.efi_type)) {
@@ -107,7 +109,7 @@ string OSXPmemImager::DumpMemoryInfoToYaml() {
       runs.push_back(run);
     }
   }
-  
+
   node["Runs"] = runs;
 
   out << node;
@@ -156,7 +158,7 @@ AFF4Status OSXPmemImager::ImagePhysicalMemory() {
       map_urn.Append("information.yaml"));
 
   if (!information_stream) {
-    LOG(ERROR) << "Unable to create memory information yaml.";
+      resolver.logger->error("Unable to create memory information yaml.");
     return IO_ERROR;
   }
 
@@ -167,26 +169,25 @@ AFF4Status OSXPmemImager::ImagePhysicalMemory() {
 
   // Also capture these files by default.
   if (inputs.size() == 0) {
-    LOG(INFO) << "Adding default file collections.";
+      resolver.logger->info("Adding default file collections.");
     inputs.push_back("/boot/*");
   }
 
   return res;
 }
 
- 
+
 AFF4Status OSXPmemImager::CreateMap_(AFF4Map *map, aff4_off_t *length) {
   AFF4ScopedPtr<FileBackedObject> device_stream = resolver.AFF4FactoryOpen
     <FileBackedObject>(device_urn);
 
   if (!device_stream) {
-    LOG(ERROR) << "Unable to open " << device_name.c_str() <<
-        " - Are you root?";
-    return IO_ERROR;
+      resolver.logger->error("Unable to open {} - Are you root?", device_name);
+      return IO_ERROR;
   }
 
   auto records = metadata.get_records();
-  
+
   for (auto record: metadata.get_records()) {
     if (record.type == pmem_efi_range_type &&
         metadata.efi_readable(record.efi_range.efi_type)) {
@@ -197,10 +198,10 @@ AFF4Status OSXPmemImager::CreateMap_(AFF4Map *map, aff4_off_t *length) {
       *length += record.efi_range.length;
     }
   }
-  
+
   if (map->Size() == 0) {
-    LOG(INFO) << "No ranges found.";
-    return NOT_FOUND;
+      resolver.logger->info("No ranges found.");
+      return NOT_FOUND;
   }
 
   return STATUS_OK;
@@ -213,10 +214,11 @@ AFF4Status OSXPmemImager::ParseArgs() {
   // Sanity checks.
   if (result == CONTINUE && Get("load-driver")->isSet() &&
       Get("unload-driver")->isSet()) {
-    LOG(ERROR) << "You can not specify both the -l and -u options together.\n";
+      resolver.logger->critical(
+          "You can not specify both the -l and -u options together.");
     return INVALID_INPUT;
   }
-  
+
   string device = GetArg<TCLAP::ValueArg<string>>("device")->getValue();
 
   device_name = aff4_sprintf("/dev/%s", device.c_str());
@@ -242,7 +244,7 @@ AFF4Status OSXPmemImager::ProcessArgs() {
 
   if (result == CONTINUE)
     result = PmemImager::ProcessArgs();
-  
+
   return result;
 }
 
@@ -251,7 +253,7 @@ AFF4Status OSXPmemImager::UninstallDriver() {
   std::cout << "Unloading driver " << driver_path << "\n";
   string argv = aff4_sprintf("/sbin/kextunload %s", driver_path.c_str());
   if (system(argv.c_str()) != 0) {
-    LOG(ERROR) << "Unable to unload driver at " << driver_path.c_str();
+      resolver.logger->error("Unable to unload driver at {}", driver_path);
     return IO_ERROR;
   }
   driver_installed_ = false;
@@ -264,13 +266,13 @@ string OSXPmemImager::get_driver_path() {
     char path[1024 * 4];
     uint32_t size = sizeof(path);
     if (_NSGetExecutablePath(path, &size) != 0) {
-      LOG(ERROR) << "Executable path too long.";
-      return "";
+        resolver.logger->error("Executable path too long.");
+        return "";
     }
 
     return aff4_sprintf("%s/MacPmem.kext", dirname(path));
 };
- 
+
 
 AFF4Status OSXPmemImager::InstallDriver() {
   AFF4ScopedPtr<FileBackedObject> device_stream = resolver.AFF4FactoryOpen
@@ -280,7 +282,7 @@ AFF4Status OSXPmemImager::InstallDriver() {
     string driver_path = get_driver_path();
     string argv = aff4_sprintf("/sbin/kextload %s", driver_path.c_str());
     if (system(argv.c_str()) != 0) {
-      LOG(ERROR) << "Unable to load driver at " << driver_path.c_str();
+        resolver.logger->error("Unable to load driver at {}", driver_path);
       return IO_ERROR;
     }
     std::cout << "Loading driver from " << driver_path << "\n";
@@ -305,3 +307,5 @@ OSXPmemImager::~OSXPmemImager() {
       UninstallDriver();
   }
 }
+
+} // namespace aff4

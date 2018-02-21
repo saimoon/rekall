@@ -29,18 +29,14 @@ specific language governing permissions and limitations under the License.
 #define IMAGER_CLASS OSXPmemImager
 #endif
 
-#include <glog/logging.h>
 #include <signal.h>
+
+namespace aff4 {
 
 AFF4Status PmemImager::Initialize() {
   AFF4Status res = BasicImager::Initialize();
   if (res != STATUS_OK)
     return res;
-
-  // Add the memory namespace to the resolver.
-  LOG(INFO) << "Adding the memory namespaces.";
-  resolver.namespaces.push_back(
-      std::pair<string, string>("memory", AFF4_MEMORY_NAMESPACE));
 
   return STATUS_OK;
 }
@@ -50,12 +46,19 @@ AFF4Status PmemImager::ParseArgs() {
   // Process the baseclass first.
   AFF4Status result = BasicImager::ParseArgs();
 
+  if (result == CONTINUE) {
+      // Add the memory namespace to the resolver.
+      resolver.namespaces.push_back(
+          std::pair<std::string, std::string>(
+              "memory", AFF4_MEMORY_NAMESPACE));
+  }
+
   // Check the requested format.
-  string format = GetArg<TCLAP::ValueArg<string>>("format")->getValue();
+  std::string format = GetArg<TCLAP::ValueArg<std::string>>("format")->getValue();
   if (result == CONTINUE && format != "map" && format != "elf" &&
       format != "raw") {
-    LOG(ERROR) << "Format " << format << " not supported.";
-    return INVALID_INPUT;
+      resolver.logger->error("Format {} not supported.", format);
+      return INVALID_INPUT;
   }
 
   return result;
@@ -65,7 +68,7 @@ AFF4Status PmemImager::ParseArgs() {
 AFF4Status PmemImager::ProcessArgs() {
   // Add the memory namespace to the resolver.
   resolver.namespaces.push_back(
-      std::pair<string, string>("memory", AFF4_MEMORY_NAMESPACE));
+      std::pair<std::string, std::string>("memory", AFF4_MEMORY_NAMESPACE));
 
   AFF4Status result = BasicImager::ProcessArgs();
   if (result != CONTINUE) {
@@ -79,7 +82,7 @@ AFF4Status PmemImager::ProcessArgs() {
 
   // The user forgot to specify an output file.
   if (!Get("output")->isSet()) {
-    LOG(ERROR) << "You need to specify an output file with --output.";
+      resolver.logger->error("You need to specify an output file with --output.");
     return INVALID_INPUT;
   }
 
@@ -88,18 +91,18 @@ AFF4Status PmemImager::ProcessArgs() {
 }
 
 AFF4Status PmemImager::handle_pagefiles() {
-  pagefiles = GetArg<TCLAP::MultiArgToNextFlag<string>>(
-      "pagefile")->getValue();
+    pagefiles = GetArg<TCLAP::MultiArgToNextFlag<std::string>>(
+        "pagefile")->getValue();
 
   return CONTINUE;
 }
 
 AFF4Status PmemImager::handle_compression() {
-  string format = GetArg<TCLAP::ValueArg<string>>(
-      "format")->getValue();
+    std::string format = GetArg<TCLAP::ValueArg<std::string>>(
+        "format")->getValue();
 
-  string compression_setting = GetArg<TCLAP::ValueArg<string>>(
-      "compression")->getValue();
+    std::string compression_setting = GetArg<TCLAP::ValueArg<std::string>>(
+        "compression")->getValue();
 
   if (format == "elf" || format == "raw") {
     std::cout << "Output format is " << format << " - compression disabled.\n";
@@ -115,7 +118,7 @@ AFF4Status PmemImager::handle_compression() {
 // Write an ELF stream.
 AFF4Status PmemImager::WriteElfFormat_(
     const URN &target_urn, const URN &output_volume_urn) {
-  LOG(INFO) << "Will write in ELF format.";
+    resolver.logger->info("Will write in ELF format.");
 
   AFF4ScopedPtr<AFF4Stream> header = resolver.CachePut<AFF4Stream>(
       new StringIO(&resolver));
@@ -130,7 +133,7 @@ AFF4Status PmemImager::WriteElfFormat_(
 
   std::vector<Range> ranges = memory_layout.GetRanges();
 
-  LOG(ERROR) << "There are " << ranges.size() << " ranges";
+  resolver.logger->info("There are {} ranges", ranges.size());
 
   // Now create a transformed map based on the ranges calculated.
   AFF4Map temp_map(&resolver);
@@ -195,7 +198,7 @@ AFF4Status PmemImager::WriteElfFormat_(
   if (!target_stream)
     return IO_ERROR;
 
-  DefaultProgress progress;
+  DefaultProgress progress(&resolver);
   progress.length = file_offset;
 
   // Now write the map into the image.
@@ -209,7 +212,7 @@ AFF4Status PmemImager::WriteElfFormat_(
 
 AFF4Status PmemImager::WriteRawFormat_(
     const URN &target_urn, const URN &output_volume_urn) {
-  LOG(INFO) << "Will write in raw format.";
+    resolver.logger->info("Will write in raw format.");
 
   // Create a temporary map for WriteStream() API.
   AFF4Map temp_stream(&resolver);
@@ -226,7 +229,7 @@ AFF4Status PmemImager::WriteRawFormat_(
   if (!target_stream)
     return IO_ERROR;
 
-  DefaultProgress progress;
+  DefaultProgress progress(&resolver);
   progress.length = total_length;
 
   // Now write the map into the image.
@@ -239,7 +242,7 @@ AFF4Status PmemImager::WriteRawFormat_(
 
 AFF4Status PmemImager::WriteMapObject_(
     const URN &map_urn, const URN &output_urn) {
-  LOG(INFO) << "Will write in AFF4 map format.";
+    resolver.logger->info("Will write in AFF4 map format.");
 
   // Create a temporary map for WriteStream() API.
   AFF4Map temp_stream(&resolver);
@@ -260,7 +263,7 @@ AFF4Status PmemImager::WriteMapObject_(
   if (!map_stream)
     return IO_ERROR;
 
-  DefaultProgress progress;
+  DefaultProgress progress(&resolver);
   progress.length = total_length;
 
   // Now write the map into the image.
@@ -280,13 +283,13 @@ AFF4ScopedPtr<AFF4Stream> PmemImager::GetWritableStream_(
     return AFF4ScopedPtr<AFF4Stream>();
 
   // If the user asked for raw or no compression just write a normal stream.
-  string format = GetArg<TCLAP::ValueArg<string>>("format")->getValue();
+  std::string format = GetArg<TCLAP::ValueArg<std::string>>("format")->getValue();
   if (format == "raw" || format == "elf") {
-    // These formats are not compressed.
-    return volume->CreateMember(output_urn);
+      // These formats are not compressed.
+      return volume->CreateMember(output_urn);
   } else {
-    return AFF4Image::NewAFF4Image(
-        &resolver, output_urn, volume_urn).cast<AFF4Stream>();
+      return AFF4Image::NewAFF4Image(
+          &resolver, output_urn, volume_urn).cast<AFF4Stream>();
   }
 
   return AFF4ScopedPtr<AFF4Stream>();
@@ -297,14 +300,14 @@ AFF4ScopedPtr<AFF4Stream> PmemImager::GetWritableStream_(
 PmemImager::~PmemImager() {
   // Remove all files that need to be removed.
   for (URN it : to_be_removed) {
-    string filename = it.ToFilename();
-    if (!DeleteFile(filename.c_str())) {
-      LOG(INFO) << "Unable to delete " << filename << ": " <<
-          GetLastErrorMessage();
+      std::string filename = it.ToFilename();
+      if (!DeleteFile(filename.c_str())) {
+          resolver.logger->info("Unable to delete {}: {}", filename,
+                                GetLastErrorMessage());
 
-    } else {
-      LOG(INFO) << "Removed " << filename;
-    }
+      } else {
+          resolver.logger->info("Removed {}", filename);
+      }
   }
 }
 #else
@@ -312,20 +315,15 @@ PmemImager::~PmemImager() {
 }
 #endif
 
-IMAGER_CLASS imager;
+} // namespace aff4
 
 int main(int argc, char* argv[]) {
-  // Initialize Google's logging library.
-  google::InitGoogleLogging(argv[0]);
+    aff4::IMAGER_CLASS imager;
+    aff4::AFF4Status res = imager.Run(argc, argv);
+    if (res == aff4::STATUS_OK || res == aff4::CONTINUE)
+          return 0;
 
-  google::LogToStderr();
-  google::SetStderrLogging(google::GLOG_ERROR);
+    imager.resolver.logger->error("Imaging failed with error: {}", res);
 
-  AFF4Status res = imager.Run(argc, argv);
-  if (res == STATUS_OK || res == CONTINUE)
-    return 0;
-
-  LOG(ERROR) << "Imaging failed with error: " << res;
-
-  return res;
+    return res;
 }

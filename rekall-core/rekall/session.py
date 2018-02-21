@@ -1135,6 +1135,10 @@ class Session(with_metaclass(registry.MetaclassRegistry, object)):
         for _, hook, args in self._flush_hooks:
             hook(*args)
 
+    # Support python2.7
+    def __bool__(self):
+        return bool(self.state)
+
 
 class DynamicNameSpace(dict):
     """A namespace which dynamically reflects the currently active plugins.
@@ -1194,9 +1198,6 @@ class DynamicNameSpace(dict):
         """Prepare a runner to run the given plugin."""
         # Create a runner for this plugin.
         return PluginRunner(self["session"], name)
-
-    def __bool__(self):
-        return bool(self.state)
 
 
 class InteractiveSession(Session):
@@ -1364,5 +1365,3 @@ Cache (%r):
         self.session_list.sort(key=lambda x: x.session_id)
 
         return new_session
-    def __bool__(self):
-        return bool(self.state)

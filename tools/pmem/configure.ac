@@ -37,12 +37,7 @@ AM_CONDITIONAL([OSX_NATIVE_HOST], [test x$gcc_cv_osx_host = xyes])
 #  echo AFF4 library not found. Please download from www.aff4.org.
 #  exit -1
 #])
-
-AC_CHECK_LIB([glog], [main], [], [
-  echo Google logging library not found. On debian systems this is provided by
-  echo apt-get install libgoogle-glog-dev
-  exit -1
-])
+AC_CHECK_LIB([pcre++], [main], [], [AC_MSG_ERROR([pcre++ library (libpcre++-dev) not found])])
 
 # We store machine stats in Yaml so this is a hard requirement.
 AS_IF([test "x$enable_yaml" = "xyes"],
